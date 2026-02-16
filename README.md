@@ -507,7 +507,7 @@ If you encounter any issues, please [open an issue](https://github.com/Aryan-20-
 
 - GitHub: [@Aryan-20-04](https://github.com/Aryan-20-04)
 - Email: sinhaaryan564.@gmail.com
-- LinkedIn: [Aryan Sinha](https://https://www.linkedin.com/in/aryan-sinha-352311328/)
+- LinkedIn: [Aryan Sinha](https://www.linkedin.com/in/aryan-sinha-352311328/)
 
 ---
 
