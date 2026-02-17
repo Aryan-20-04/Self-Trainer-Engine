@@ -18,7 +18,7 @@
 
 **SelfTrainerEngine** is a production-ready, automated machine learning framework designed for tabular data. It intelligently handles the entire ML pipeline—from task detection to model deployment—with minimal configuration required.
 
-Built for data scientists and ML engineers who need **reliable, explainable, and efficient** models without the overhead of manual hyperparameter tuning and pipeline engineering.
+Designed for production-grade tabular ML systems requiring automation, monitoring, explainability, and reproducibility.
 
 ### Why SelfTrainerEngine?
 
@@ -86,6 +86,10 @@ SHAP-powered interpretability:
 - **Global explanations**: Feature importance across entire dataset
 - **Instance-level explanations**: Why a specific prediction was made
 - Automatic TreeExplainer/KernelExplainer fallback
+
+### 🧪 Experiment Tracking & Registry
+
+Every training run is automatically logged in a structured format:
 
 ---
 
@@ -165,23 +169,18 @@ matplotlib>=3.4.0
 import pandas as pd
 from core.engine import SelfTrainerEngine
 
-# Load your data
 df = pd.read_csv("data/your_dataset.csv")
 
-# Initialize and train
 engine = SelfTrainerEngine()
 engine.fit(df, target="target_column")
 
-# View performance summary
 engine.summary()
 
-# Generate global explanation
-engine.explain_global(save_path="feature_importance.png")
+engine.explain_global()
 
-# Explain a single prediction
 sample = df.drop("target_column", axis=1).sample(1)
-top_features = engine.explain_instance(sample)
-print(top_features)
+engine.explain_instance(sample)
+
 ```
 
 ### Classification Example
@@ -222,7 +221,24 @@ engine.summary()
 # Best Model: LightGBMRegressor
 # Test RMSE: 23456.78
 ```
+### Full Lifecycle Example (Training → Monitoring → Reload)
+```python
+engine = SelfTrainerEngine()
+engine.fit(df, target="Class")
 
+# Predict
+preds = engine.predict(df.drop("Class", axis=1))
+
+# Drift Detection
+engine.check_drift(df.drop("Class", axis=1))
+
+# Reload Model
+new_engine = SelfTrainerEngine()
+new_engine.load(engine.model_path, engine.meta_path)
+
+# Predict after reload
+prediction = new_engine.predict(df.drop("Class", axis=1).sample(1))
+```
 ---
 
 ## 📂 Project Structure
@@ -242,6 +258,12 @@ SelfTrainerEngine/
 ├── explainability/           # Explainability module
 │   ├── __pycache__/
 │   └── explainer.py          # SHAP integration
+│
+├──experiments/
+│  ├── registry.json
+│   ├──run_YYYYMMDD_HHMMSS/
+│      ├──metadata.json
+│      ├──metrics.json
 │
 ├── monitoring/               # Model monitoring (planned)
 │
@@ -375,22 +397,30 @@ Optimal Threshold: 0.23
 - [x] Imbalance handling
 - [x] Proper train/val/test splitting
 
-### v1.1 🚧 (In Progress)
+### v1.1 ✅
 
-- [ ] Drift detection module
-- [ ] Model versioning and registry
-- [ ] Feature engineering automation
+- [x] Structured experiment tracking
+- [x] Model versioning & metadata persistence
+- [x] Experiment registry system
+- [x] Drift detection (PSI-based)
+- [x] Reloadable model state
+- [x] Validation-based threshold calibration
+
+### v1.2 🚧 (Next)
+
+- [ ] Persisted drift baseline storage
+- [ ] Config-driven engine (dev/full modes)
+- [ ] Advanced metric configuration
 - [ ] Hyperparameter optimization (Optuna)
-- [ ] Advanced monitoring capabilities
+- [ ] Performance benchmarking module
 
 ### v2.0 🔮 (Planned)
 
 - [ ] FastAPI deployment wrapper
-- [ ] MLflow experiment tracking
-- [ ] AutoML with reinforcement learning
+- [ ] MLflow integration
+- [ ] Reinforcement learning model selector
 - [ ] Time-series support
-- [ ] Custom model integration API
-- [ ] Web-based dashboard
+- [ ] Web-based monitoring dashboard
 - [ ] Docker containerization
 - [ ] Kubernetes deployment configs
 
@@ -497,7 +527,7 @@ SOFTWARE.
 
 - None currently! 🎉
 
-If you encounter any issues, please [open an issue](https://github.com/Aryan-20-4/SelfTrainerEngine/issues) on GitHub.
+If you encounter any issues, please [open an issue](https://github.com/Aryan-20-04/SelfTrainerEngine/issues) on GitHub.
 
 ---
 
