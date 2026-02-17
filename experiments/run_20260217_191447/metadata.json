@@ -1,7 +1,0 @@
-{
-    "timestamp": "20260217_191447",
-    "task_type": "classification",
-    "best_model": "XGBoost",
-    "dataset_size": 85442,
-    "optimal_threshold": 0.9855782389640808
-}
