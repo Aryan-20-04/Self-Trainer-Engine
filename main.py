@@ -11,7 +11,7 @@ engine.summary()
 
 engine.explain_global()
 drifted_df = df.drop("Class", axis=1).copy()
-drifted_df["V14"] *= 1.5
+drifted_df["V14"] *= 1.5   # Artificial Drift added
 
 engine.check_drift(drifted_df)
 
