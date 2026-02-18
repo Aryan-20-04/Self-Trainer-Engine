@@ -2,7 +2,7 @@
 
 # 🧠 SelfTrainerEngine
 
-### _Intelligent Self-Training ML Framework for Tabular Data_
+### _Lifecycle-Aware, Tunable, Experiment-Tracked, Drift-Detecting ML Orchestration Framework_
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -16,16 +16,20 @@
 
 ## 📖 Overview
 
-**SelfTrainerEngine** is a production-ready, automated machine learning framework designed for tabular data. It intelligently handles the entire ML pipeline—from task detection to model deployment—with minimal configuration required.
+**SelfTrainerEngine** is a production-ready, automated machine learning framework designed for tabular data. It intelligently handles the entire ML lifecycle—from task detection to model deployment—with built-in hyperparameter tuning, drift detection, experiment tracking, and full reproducibility.
 
 Designed for production-grade tabular ML systems requiring automation, monitoring, explainability, and reproducibility.
 
 ### Why SelfTrainerEngine?
 
 - 🎯 **Zero-config ML**: Automatically detects task type, handles imbalance, and selects optimal models
+- ⚙️ **Config-Driven Engine**: Switch between `dev` and `full` modes for fast experimentation or deep training
+- 🔧 **Intelligent Hyperparameter Tuning**: Optuna-powered tuning applied to top-2 models only — no wasted compute
 - 🔍 **Built-in Explainability**: SHAP integration for global and instance-level interpretability
 - ⚖️ **Smart Imbalance Handling**: Automatic detection and correction for class imbalance
 - 📊 **Proper Validation**: Clean train/validation/test splits with threshold optimization
+- 📈 **Drift Detection**: PSI-based feature-level drift monitoring with persisted baselines
+- 🧪 **Experiment Tracking**: Structured logging of every run with full metadata persistence
 - 🚀 **Production-Ready**: Designed with best practices for real-world deployment
 
 ---
@@ -38,6 +42,39 @@ Intelligently identifies your ML problem:
 
 - **Binary/Multi-class Classification**
 - **Regression**
+
+### ⚙️ Config-Driven Engine (dev / full mode)
+
+Control engine behavior via `EngineConfig`:
+
+```python
+from core.engine import SelfTrainerEngine, EngineConfig
+
+# Fast experimentation
+config = EngineConfig(mode="dev")
+
+# Deep production training
+config = EngineConfig(mode="full")
+
+engine = SelfTrainerEngine(config=config)
+```
+
+`EngineConfig` controls:
+
+- CV folds
+- SHAP sample size
+- Tree estimators
+- Drift threshold
+- Optuna timeout / trials
+
+### 🔧 Hyperparameter Optimization (Optuna)
+
+The engine now evaluates all candidate models, selects the **top 2**, and tunes only those using Optuna — preventing unnecessary compute waste.
+
+- Applied to: XGBoost, RandomForest, LightGBM, LogisticRegression
+- Uses cross-validation scoring with the correct task metric
+- Best params are automatically applied and saved in metadata
+- Timeout-based tuning for production-realistic behavior
 
 ### ⚖️ Imbalance Handling
 
@@ -81,15 +118,54 @@ Ensures no data leakage with clean splits:
 
 ### 💡 Explainability
 
-SHAP-powered interpretability:
+SHAP-powered interpretability (stabilized with config-driven sample sizes):
 
 - **Global explanations**: Feature importance across entire dataset
 - **Instance-level explanations**: Why a specific prediction was made
 - Automatic TreeExplainer/KernelExplainer fallback
+- Works correctly after model reload
 
-### 🧪 Experiment Tracking & Registry
+### 📊 Structured Experiment Logging
 
-Every training run is automatically logged in a structured format:
+Every training run is automatically logged under `experiments/run_YYYYMMDD_HHMMSS/` with:
+
+- CV results
+- Best model & best params
+- Test score
+- Threshold
+- Dataset size
+- Timestamp
+
+### 📦 Full Metadata Persistence
+
+Model metadata now includes: `best_params`, `baseline` (for drift), `threshold`, `cv_results`, and `test_score` — making every model fully reproducible.
+
+### 🌊 PSI-Based Drift Detection
+
+- Baseline is built from training data and stored in metadata
+- Reloadable after model load
+- PSI calculated per feature
+- Drifted features reported individually
+
+---
+
+## 🔄 Engine Flow
+
+```
+fit()
+ ├── Detect task
+ ├── Split (train/val/test)
+ ├── Build drift baseline
+ ├── Evaluate all models
+ ├── Select top 2
+ ├── Tune with Optuna
+ ├── Select best tuned model
+ ├── Threshold optimization
+ ├── Final test evaluation
+ ├── Save model + metadata
+ ├── Log experiment
+ └── Initialize SHAP explainer
+```
 
 ---
 
@@ -157,6 +233,7 @@ xgboost>=1.5.0
 lightgbm>=3.3.0
 shap>=0.41.0
 matplotlib>=3.4.0
+optuna>=3.0.0
 ```
 
 ---
@@ -180,7 +257,22 @@ engine.explain_global()
 
 sample = df.drop("target_column", axis=1).sample(1)
 engine.explain_instance(sample)
+```
 
+### Config-Driven Usage
+
+```python
+from core.engine import SelfTrainerEngine, EngineConfig
+
+# Dev mode: fast runs, fewer folds, fewer estimators
+config = EngineConfig(mode="dev")
+engine = SelfTrainerEngine(config=config)
+engine.fit(df, target="Class")
+
+# Full mode: deep training, more folds, longer Optuna timeout
+config = EngineConfig(mode="full")
+engine = SelfTrainerEngine(config=config)
+engine.fit(df, target="Class")
 ```
 
 ### Classification Example
@@ -196,6 +288,7 @@ engine.fit(df, target="Class")
 # - Imbalanced classes
 # - Optimal threshold selection
 # - Model selection (ROC-AUC metric)
+# - Hyperparameter tuning (Optuna)
 
 engine.summary()
 # Output:
@@ -221,7 +314,9 @@ engine.summary()
 # Best Model: LightGBMRegressor
 # Test RMSE: 23456.78
 ```
+
 ### Full Lifecycle Example (Training → Monitoring → Reload)
+
 ```python
 engine = SelfTrainerEngine()
 engine.fit(df, target="Class")
@@ -239,6 +334,7 @@ new_engine.load(engine.model_path, engine.meta_path)
 # Predict after reload
 prediction = new_engine.predict(df.drop("Class", axis=1).sample(1))
 ```
+
 ---
 
 ## 📂 Project Structure
@@ -247,36 +343,40 @@ prediction = new_engine.predict(df.drop("Class", axis=1).sample(1))
 SelfTrainerEngine/
 │
 ├── core/                      # Core ML engine components
-│   ├── __pycache__/
-│   ├── engine.py             # Main orchestrator
+│   ├── engine.py             # Main orchestrator + EngineConfig
 │   ├── evaluator.py          # Performance evaluation
-│   ├── model_registry.py     # Model configurations
+│   ├── model_registry.py     # Model configurations (config-driven estimators)
 │   ├── task_detector.py      # Task type detection
 │   ├── threshold.py          # Threshold optimization
 │   └── trainer.py            # Model training logic
 │
+├── optimization/             # Hyperparameter tuning
+│   └── tuner.py              # Optuna integration
+│
 ├── explainability/           # Explainability module
-│   ├── __pycache__/
 │   └── explainer.py          # SHAP integration
 │
-├──experiments/
-│  ├── registry.json
-│   ├──run_YYYYMMDD_HHMMSS/
-│      ├──metadata.json
-│      ├──metrics.json
+├── monitoring/               # Drift detection
+│   └── drift.py              # PSI-based drift detector
 │
-├── monitoring/               # Model monitoring (planned)
+├── versioning/               # Model versioning
 │
-├── versioning/               # Model versioning (planned)
+├── experiments/              # Experiment logs
+│   ├── registry.json
+│   └── run_YYYYMMDD_HHMMSS/
+│       ├── metadata.json
+│       └── metrics.json
+│
+├── models/                   # Saved model artifacts
 │
 ├── data/                     # Data directory (add your datasets here)
 │
 ├── reports/                  # Generated SHAP plots and reports
 │
-├── .gitignore               # Git ignore file
-├── main.py                  # Example usage script
-├── requirements.txt         # Python dependencies
-└── README.md               # This file
+├── .gitignore
+├── main.py                   # Example usage script
+├── requirements.txt
+└── README.md
 ```
 
 ---
@@ -327,32 +427,35 @@ python generate_images.py
 
 - **`fit(df: pd.DataFrame, target: str)`**
   - Trains the engine on your dataset
-  - Automatically detects task, handles imbalance, selects model
+  - Automatically detects task, handles imbalance, tunes and selects model
   - **Parameters:**
     - `df`: Input DataFrame containing features and target
     - `target`: Name of the target column
 - **`summary()`**
   - Prints comprehensive performance metrics
   - Shows optimal threshold (if classification)
-  - Displays best model and evaluation scores
+  - Displays best model, best params, and evaluation scores
 - **`explain_global(save_path: str = None)`**
   - Generates SHAP summary plot
   - Shows feature importance across dataset
   - **Parameters:**
-    - `save_path`: Optional path to save the plot (e.g., "feature_importance.png")
+    - `save_path`: Optional path to save the plot
 - **`explain_instance(X_instance: pd.DataFrame)`**
   - Returns top 5 features affecting a prediction
-  - Provides SHAP values for interpretation
   - **Parameters:**
     - `X_instance`: Single row DataFrame (without target column)
   - **Returns:** List of (feature, shap_value) tuples
-
 - **`predict(X: pd.DataFrame)`**
-  - Makes predictions on new data
-  - Uses optimal threshold for classification
+  - Makes predictions on new data using optimal threshold
   - **Parameters:**
     - `X`: DataFrame with same features as training data
   - **Returns:** Predictions array
+- **`check_drift(X: pd.DataFrame)`**
+  - Computes PSI per feature against stored baseline
+  - Reports drifted features above configured threshold
+- **`load(model_path: str, meta_path: str)`**
+  - Reloads a previously saved model with full metadata
+  - Restores drift baseline, threshold, and SHAP explainer
 
 ---
 
@@ -371,10 +474,13 @@ Expected output:
 [SelfTrainerEngine] Task detected: classification
 [SelfTrainerEngine] Checking for class imbalance...
 [SelfTrainerEngine] Imbalance detected (ratio: 0.15)
-[SelfTrainerEngine] Training models...
+[SelfTrainerEngine] Training and evaluating models...
+[SelfTrainerEngine] Top 2 selected: XGBoostClassifier, LightGBMClassifier
+[SelfTrainerEngine] Tuning with Optuna...
 [SelfTrainerEngine] Best model: XGBoostClassifier
 [SelfTrainerEngine] Optimizing threshold...
 [SelfTrainerEngine] Optimal threshold: 0.23
+[SelfTrainerEngine] Experiment logged → experiments/run_20240101_120000/
 
 ========== SUMMARY ==========
 Task: classification
@@ -406,13 +512,18 @@ Optimal Threshold: 0.23
 - [x] Reloadable model state
 - [x] Validation-based threshold calibration
 
-### v1.2 🚧 (Next)
+### v1.2 ✅
 
-- [ ] Persisted drift baseline storage
-- [ ] Config-driven engine (dev/full modes)
-- [ ] Advanced metric configuration
-- [ ] Hyperparameter optimization (Optuna)
-- [ ] Performance benchmarking module
+- [x] Config-driven engine (dev / full modes)
+- [x] Hyperparameter optimization (Optuna)
+- [x] Top-2 model tuning (compute-efficient)
+- [x] Timeout-based tuning
+- [x] Persisted drift baseline storage
+- [x] PSI-based feature-level drift reporting
+- [x] Expanded metadata persistence (best_params, cv_results, baseline)
+- [x] LightGBM stability improvements
+- [x] Config-driven tree estimators
+- [x] Real-world dataset validation (Credit Card Fraud, Telco Churn)
 
 ### v2.0 🔮 (Planned)
 
@@ -492,13 +603,14 @@ SOFTWARE.
 
 - Built with [scikit-learn](https://scikit-learn.org/), [XGBoost](https://xgboost.readthedocs.io/), and [LightGBM](https://lightgbm.readthedocs.io/)
 - Explainability powered by [SHAP](https://shap.readthedocs.io/)
+- Hyperparameter tuning powered by [Optuna](https://optuna.org/)
 - Inspired by AutoML frameworks and production ML best practices
 
 ---
 
 ## 📊 Performance Benchmarks
 
-### Example data used: Credit Card Fraud Detection
+### Credit Card Fraud Detection (Dataset 1)
 
 | Model              | Cross-Val Score | Performance |
 | ------------------ | --------------- | ----------- |
@@ -513,13 +625,30 @@ SOFTWARE.
 **Optimal Threshold**: 0.9856  
 **Validation F1**: 0.8235
 
-### Top Features (SHAP Analysis):
+### Telco Customer Churn Detection (Dataset 2)
+
+| Model                     | Cross-Val Score | Performance |
+| ------------------------- | --------------- | ----------- |
+| **LogisticRegression ⭐** | **0.846108**    | Excellent   |
+| XGBoost                   | 0.831407        | Excellent   |
+| RandomForest              | 0.827643        | Excellent   |
+| LightGBM                  | 0.826301        | Excellent   |
+| MLP                       | 0.776735        | Good        |
+
+**Best Model After Tuning**: XGBoost  
+**Final Test Score**: 0.827987  
+**Optimal Threshold**: 0.3944  
+**Validation F1**: 0.6715
+
+### Top Features (SHAP Analysis — Credit Card Fraud):
 
 1. **V10**: -3.818 (decreases fraud probability)
 2. **V14**: -2.056 (decreases fraud probability)
 3. **V12**: -1.625 (decreases fraud probability)
 4. **V4**: -1.186 (decreases fraud probability)
 5. **V16**: -0.730 (decreases fraud probability)
+
+> SHAP global feature importance plot for the Telco Churn run saved to `reports/global_shap.png`.
 
 ---
 
@@ -547,13 +676,19 @@ If you encounter any issues, please [open an issue](https://github.com/Aryan-20-
 A: Currently, SelfTrainerEngine supports scikit-learn compatible models. Custom model integration is planned for v2.0.
 
 **Q: Does it work with large datasets?**  
-A: Yes! The framework is optimized for datasets up to millions of rows. For very large datasets (>10M rows), consider sampling for model selection.
+A: Yes! The framework is optimized for datasets up to millions of rows. For very large datasets (>10M rows), consider sampling for model selection. Use `mode="dev"` in `EngineConfig` for faster iteration.
 
 **Q: Can I disable certain models?**  
 A: Yes, you can modify `core/model_registry.py` to customize which models are evaluated.
 
 **Q: Is GPU support available?**  
 A: XGBoost and LightGBM support GPU acceleration. Set `tree_method='gpu_hist'` in model_registry.py.
+
+**Q: How does Optuna tuning work?**  
+A: The engine evaluates all candidate models, picks the top 2 by CV score, and tunes only those using Optuna with timeout-based search. Best params are saved in metadata for full reproducibility.
+
+**Q: What is dev vs full mode?**  
+A: `mode="dev"` uses fewer CV folds, fewer tree estimators, and a shorter Optuna timeout for rapid iteration. `mode="full"` uses deeper settings for production-quality training.
 
 ---
 

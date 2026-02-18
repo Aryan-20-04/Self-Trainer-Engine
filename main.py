@@ -1,32 +1,23 @@
 import pandas as pd
 from core.engine import SelfTrainerEngine
 
-df = pd.read_csv("data/creditcard.csv")
-df = df.sample(frac=0.3, random_state=42)
+df = pd.read_csv("data/telco_churn_data.csv")
 
-engine = SelfTrainerEngine()
-engine.fit(df, target="Class")
+# Drop ID
+df = df.drop("customerID", axis=1)
+
+# Fix target
+df["Churn"] = df["Churn"].map({"Yes": 1, "No": 0})
+
+# Fix numeric column
+df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce")
+df = df.dropna()
+
+# One-hot encoding
+df = pd.get_dummies(df, drop_first=True)
+
+engine = SelfTrainerEngine(mode="full")
+engine.fit(df, target="Churn")
 
 engine.summary()
-
 engine.explain_global()
-drifted_df = df.drop("Class", axis=1).copy()
-drifted_df["V14"] *= 1.5   # Artificial Drift added
-
-engine.check_drift(drifted_df)
-
-# Explain one sample
-X_sample = df.drop("Class", axis=1).sample(1, random_state=42)
-engine.explain_instance(X_sample)
-
-# -----------------------------
-# Test Model Loading
-# -----------------------------
-print("\nTesting model reload...")
-
-new_engine = SelfTrainerEngine()
-new_engine.load(engine.model_path, engine.meta_path)
-
-# Test prediction after loading
-prediction = new_engine.predict(X_sample)
-print("Prediction after loading:", prediction)
