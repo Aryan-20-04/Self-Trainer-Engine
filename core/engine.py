@@ -1,3 +1,15 @@
+"""
+core/engine.py
+==============
+SelfTrainerEngine — the main orchestration class.
+
+Changes (Steps 2 & 3):
+  - All print() calls replaced with logger calls at appropriate levels.
+  - All bare RuntimeError raises replaced with structured exception classes.
+  - A single module-level logger is used throughout; callers configure it.
+"""
+
+import logging
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from datetime import datetime
@@ -8,6 +20,12 @@ from core.model_registry import get_models
 from core.evaluator import evaluate_model
 from core.threshold import find_optimal_threshold
 from core.config import EngineConfig
+from core.exceptions import (
+    ModelNotTrainedError,
+    ExplainerNotReadyError,
+    BaselineNotAvailableError,
+    PersistenceError,
+)
 
 from explainability.explainer import ModelExplainer
 from versioning.model_store import save_model
@@ -17,6 +35,8 @@ from monitoring.baseline import build_baseline
 from monitoring.drift_detector import detect_drift_from_baseline as detect_drift
 
 from optimization.optuna_tuner import optimize_model
+
+logger = logging.getLogger("self_trainer.engine")
 
 
 class SelfTrainerEngine:
@@ -46,7 +66,7 @@ class SelfTrainerEngine:
         y = df[target]
 
         self.task_type = detect_task_type(y)
-        print("Detected Task Type:", self.task_type)
+        logger.info("Detected task type: %s", self.task_type)
 
         # ---------------------------
         # Train / Validation / Test Split
@@ -63,10 +83,16 @@ class SelfTrainerEngine:
             random_state=42
         )
 
+        logger.info(
+            "Data split — train: %d, val: %d, test: %d rows.",
+            len(X_train), len(X_val), len(X_test)
+        )
+
         # ---------------------------
         # Drift Baseline
         # ---------------------------
         self.baseline = build_baseline(X_train)
+        logger.debug("Drift baseline built for %d feature(s).", len(self.baseline))
 
         # ---------------------------
         # Get Candidate Models
@@ -74,75 +100,57 @@ class SelfTrainerEngine:
         models = get_models(self.task_type, y_train, self.config)
         results = {}
 
-        print("\nCross-validation on TRAIN set:\n")
+        logger.info("Cross-validation on TRAIN set (%d folds):", self.config.cv_folds)
 
         for name, model in models.items():
             score = evaluate_model(
-                model,
-                X_train,
-                y_train,
-                self.task_type,
-                self.config
+                model, X_train, y_train, self.task_type, self.config
             )
             results[name] = score
-            print(f"{name}: {score:.6f}")
+            logger.info("  %-20s %.6f", name, score)
 
         # ---------------------------
         # Select Top 2 Models
         # ---------------------------
-        sorted_models = sorted(
-            results.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-
+        sorted_models = sorted(results.items(), key=lambda x: x[1], reverse=True)
         top_models = sorted_models[:2]
         tuned_results = {}
 
         # ---------------------------
-        # Hyperparameter Optimization
+        # Hyperparameter Optimisation
         # ---------------------------
         for model_name, _ in top_models:
 
-            print(f"\n🔧 Tuning {model_name} with Optuna...")
+            logger.info("Tuning %s with Optuna...", model_name)
 
             tuned_model, best_params = optimize_model(
-                model_name,
-                models[model_name],
-                X_train,
-                y_train,
-                self.task_type,
-                self.config
+                model_name, models[model_name],
+                X_train, y_train,
+                self.task_type, self.config
             )
 
             tuned_score = evaluate_model(
-                tuned_model,
-                X_train,
-                y_train,
-                self.task_type,
-                self.config
+                tuned_model, X_train, y_train, self.task_type, self.config
             )
 
             tuned_results[model_name] = {
                 "model": tuned_model,
                 "score": tuned_score,
-                "params": best_params
+                "params": best_params,
             }
 
-            print(f"Tuned {model_name} Score: {tuned_score:.6f}")
+            logger.info("Tuned %s score: %.6f", model_name, tuned_score)
 
         # ---------------------------
         # Select Final Best Model
         # ---------------------------
         self.best_model_name = max(
-            tuned_results,
-            key=lambda x: tuned_results[x]["score"]
+            tuned_results, key=lambda x: tuned_results[x]["score"]
         )
-
         self.best_model = tuned_results[self.best_model_name]["model"]
         best_params = tuned_results[self.best_model_name]["params"]
 
-        print(f"\nFinal Best Model After Tuning: {self.best_model_name}")
+        logger.info("Final best model after tuning: %s", self.best_model_name)
 
         # ---------------------------
         # Final Training
@@ -151,33 +159,24 @@ class SelfTrainerEngine:
         self.results = results
 
         # ---------------------------
-        # Threshold Optimization
+        # Threshold Optimisation
         # ---------------------------
         if self.task_type == "classification":
-
             self.optimal_threshold, best_f1 = find_optimal_threshold(
-                self.best_model,
-                X_val,
-                y_val
+                self.best_model, X_val, y_val
             )
-
-            print(f"\nOptimal Threshold (validation): {self.optimal_threshold:.4f}")
-            print(f"Validation F1: {best_f1:.4f}")
+            logger.info(
+                "Optimal threshold (validation): %.4f  |  F1: %.4f",
+                self.optimal_threshold, best_f1
+            )
 
         # ---------------------------
         # Final Test Evaluation
         # ---------------------------
-        print("\nFinal Test Evaluation:\n")
-
         test_score = evaluate_model(
-            self.best_model,
-            X_test,
-            y_test,
-            self.task_type,
-            self.config
+            self.best_model, X_test, y_test, self.task_type, self.config
         )
-
-        print(f"Test Score: {test_score:.6f}")
+        logger.info("Test score: %.6f", test_score)
 
         # ---------------------------
         # Model Persistence
@@ -190,16 +189,13 @@ class SelfTrainerEngine:
             "optimal_threshold": float(self.optimal_threshold),
             "test_score": float(test_score),
             "baseline": self.baseline,
-            "best_params": best_params
+            "best_params": best_params,
         }
 
-        self.model_path, self.meta_path = save_model(
-            self.best_model,
-            metadata
-        )
+        self.model_path, self.meta_path = save_model(self.best_model, metadata)
 
-        print("\nModel saved to:", self.model_path)
-        print("Metadata saved to:", self.meta_path)
+        logger.info("Model saved → %s", self.model_path)
+        logger.info("Metadata saved → %s", self.meta_path)
 
         # ---------------------------
         # Experiment Logging
@@ -210,10 +206,10 @@ class SelfTrainerEngine:
             task_type=self.task_type,
             test_score=float(test_score),
             optimal_threshold=float(self.optimal_threshold),
-            dataset_size=len(df)
+            dataset_size=len(df),
         )
 
-        print("Experiment logged at:", self.experiment_path)
+        logger.info("Experiment logged → %s", self.experiment_path)
 
         # ---------------------------
         # Explainability
@@ -225,6 +221,7 @@ class SelfTrainerEngine:
 
         self.explainer = ModelExplainer(self.best_model)
         self.explainer.fit(self.X_train_sample)
+        logger.info("SHAP explainer fitted on %d samples.", len(self.X_train_sample))
 
     # ==========================================================
     # PREDICTION
@@ -232,13 +229,21 @@ class SelfTrainerEngine:
     def predict(self, X):
 
         if self.best_model is None:
-            raise RuntimeError("Model not trained.")
+            raise ModelNotTrainedError(
+                "Cannot predict: model has not been trained. Call fit() first."
+            )
 
         if self.task_type == "classification":
             probs = self.best_model.predict_proba(X)[:, 1]
-            return (probs >= self.optimal_threshold).astype(int)
+            preds = (probs >= self.optimal_threshold).astype(int)
+            logger.debug(
+                "Predicted %d samples (threshold=%.4f).", len(preds), self.optimal_threshold
+            )
+            return preds
 
-        return self.best_model.predict(X)
+        preds = self.best_model.predict(X)
+        logger.debug("Predicted %d samples (regression).", len(preds))
+        return preds
 
     # ==========================================================
     # DRIFT DETECTION
@@ -246,24 +251,26 @@ class SelfTrainerEngine:
     def check_drift(self, new_df):
 
         if self.baseline is None:
-            raise RuntimeError("Baseline not available.")
+            raise BaselineNotAvailableError(
+                "Cannot check drift: baseline not available. Call fit() first."
+            )
 
         drift_report, drifted_features = detect_drift(
             self.baseline,
             new_df,
-            threshold=self.config.drift_threshold
+            threshold=self.config.drift_threshold,
         )
 
-        print("\nDrift Report (PSI Scores):")
+        logger.info("Drift report (PSI scores):")
         for feature, psi in drift_report.items():
-            print(f"{feature}: {psi:.4f}")
+            logger.info("  %-20s %.4f", feature, psi)
 
         if drifted_features:
-            print("\n⚠ Drifted Features Detected:")
-            for feature, psi in drifted_features.items():
-                print(f"{feature}: {psi:.4f}")
+            logger.warning(
+                "Drifted features detected: %s", list(drifted_features.keys())
+            )
         else:
-            print("\nNo significant drift detected.")
+            logger.info("No significant drift detected.")
 
         return drift_report, drifted_features
 
@@ -273,34 +280,42 @@ class SelfTrainerEngine:
     def explain_global(self):
 
         if self.explainer is None:
-            raise RuntimeError("Explainer not initialized.")
+            raise ExplainerNotReadyError(
+                "Cannot explain: SHAP explainer not initialised. Call fit() first."
+            )
 
         path = self.explainer.global_explanation(
             self.X_train_sample,
             save_path="global_shap.png"
         )
-
-        print("Global SHAP plot saved to:", path)
+        logger.info("Global SHAP plot saved → %s", path)
 
     def explain_instance(self, X_instance):
 
         if self.explainer is None:
-            raise RuntimeError("Explainer not initialized.")
+            raise ExplainerNotReadyError(
+                "Cannot explain: SHAP explainer not initialised. Call fit() first."
+            )
 
         contributions = self.explainer.explain_instance(X_instance)
 
-        print("\nTop Feature Contributions:")
+        logger.info("Top feature contributions:")
         for feature, value in contributions:
             direction = "increased" if value > 0 else "decreased"
-            print(f"{feature} {direction} prediction impact ({value:.5f})")
+            logger.info("  %s %s prediction impact (%.5f)", feature, direction, value)
 
     # ==========================================================
     # LOAD MODEL
     # ==========================================================
-    def load(self, model_path, meta_path):
+    def load(self, model_path: str, meta_path: str):
 
-        self.best_model = joblib.load(model_path)
-        metadata = joblib.load(meta_path)
+        try:
+            self.best_model = joblib.load(model_path)
+            metadata = joblib.load(meta_path)
+        except (FileNotFoundError, Exception) as exc:
+            raise PersistenceError(
+                f"Failed to load model from '{model_path}': {exc}"
+            ) from exc
 
         self.task_type = metadata["task_type"]
         self.best_model_name = metadata["best_model"]
@@ -310,7 +325,10 @@ class SelfTrainerEngine:
 
         self.explainer = ModelExplainer(self.best_model)
 
-        print("Model loaded successfully.")
+        logger.info(
+            "Model loaded — type=%s, model=%s, threshold=%.4f",
+            self.task_type, self.best_model_name, self.optimal_threshold
+        )
 
     # ==========================================================
     # SUMMARY
@@ -318,8 +336,10 @@ class SelfTrainerEngine:
     def summary(self):
 
         if self.results is None:
-            raise RuntimeError("No results available.")
+            raise ModelNotTrainedError(
+                "No results available. Call fit() before summary()."
+            )
 
-        print("\nModel Performance Summary")
+        logger.info("Model performance summary:")
         for name, score in self.results.items():
-            print(f"{name}: {score:.6f}")
+            logger.info("  %-20s %.6f", name, score)

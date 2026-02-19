@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 data/creditcard.csv
 *.json
+*.log
 
 # Virtual environment
 venv/

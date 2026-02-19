@@ -69,7 +69,7 @@ engine = SelfTrainerEngine(config=config)
 
 ### 🔧 Hyperparameter Optimization (Optuna)
 
-The engine now evaluates all candidate models, selects the **top 2**, and tunes only those using Optuna — preventing unnecessary compute waste.
+The engine evaluates all candidate models, selects the **top 2**, and tunes only those using Optuna — preventing unnecessary compute waste.
 
 - Applied to: XGBoost, RandomForest, LightGBM, LogisticRegression
 - Uses cross-validation scoring with the correct task metric
@@ -351,15 +351,18 @@ SelfTrainerEngine/
 │   └── trainer.py            # Model training logic
 │
 ├── optimization/             # Hyperparameter tuning
-│   └── tuner.py              # Optuna integration
+│   └── optuna_tuner.py       # Optuna integration
 │
 ├── explainability/           # Explainability module
 │   └── explainer.py          # SHAP integration
 │
-├── monitoring/               # Drift detection
-│   └── drift.py              # PSI-based drift detector
+├── monitoring/               # Drift detection & experiment tracking
+│   ├── baseline.py           # Baseline builder
+│   ├── drift_detector.py     # PSI-based drift detector
+│   └── experiment_tracker.py # Experiment logging
 │
 ├── versioning/               # Model versioning
+│   └── model_store.py        # Save/load model artifacts
 │
 ├── experiments/              # Experiment logs
 │   ├── registry.json
@@ -369,11 +372,14 @@ SelfTrainerEngine/
 │
 ├── models/                   # Saved model artifacts
 │
-├── data/                     # Data directory (add your datasets here)
-│
 ├── reports/                  # Generated SHAP plots and reports
 │
+├── tests/
+│   ├── test_self_trainer.py  # Core functionality tests
+│   └── test_stress.py        # Edge case & stress tests (122 tests)
+│
 ├── .gitignore
+├── conftest.py
 ├── main.py                   # Example usage script
 ├── requirements.txt
 └── README.md
@@ -425,12 +431,14 @@ python generate_images.py
 
 **Methods:**
 
-- **`fit(df: pd.DataFrame, target: str)`**
+- **`fit(df: pd.DataFrame, target: str, test_size: float = 0.2, val_size: float = 0.2)`**
   - Trains the engine on your dataset
   - Automatically detects task, handles imbalance, tunes and selects model
   - **Parameters:**
     - `df`: Input DataFrame containing features and target
     - `target`: Name of the target column
+    - `test_size`: Fraction of data held out for final testing (default 0.2)
+    - `val_size`: Fraction of data held out for validation and threshold tuning (default 0.2)
 - **`summary()`**
   - Prints comprehensive performance metrics
   - Shows optimal threshold (if classification)
@@ -444,7 +452,7 @@ python generate_images.py
   - Returns top 5 features affecting a prediction
   - **Parameters:**
     - `X_instance`: Single row DataFrame (without target column)
-  - **Returns:** List of (feature, shap_value) tuples
+  - **Returns:** List of (feature, shap_value) tuples, sorted by absolute SHAP value descending
 - **`predict(X: pd.DataFrame)`**
   - Makes predictions on new data using optimal threshold
   - **Parameters:**
@@ -453,6 +461,7 @@ python generate_images.py
 - **`check_drift(X: pd.DataFrame)`**
   - Computes PSI per feature against stored baseline
   - Reports drifted features above configured threshold
+  - **Returns:** Tuple of `(drift_report dict, drifted_features dict)`
 - **`load(model_path: str, meta_path: str)`**
   - Reloads a previously saved model with full metadata
   - Restores drift baseline, threshold, and SHAP explainer
@@ -461,34 +470,118 @@ python generate_images.py
 
 ## 🧪 Testing
 
-Run the example script:
+Run the full test suite:
 
 ```bash
-python main.py
+cd Self-Trainer
+pytest tests/test_stress.py -v
 ```
 
-Expected output:
+The stress test suite covers 122 test cases across 12 test classes:
+
+- NaN / Inf / zero-variance / empty data inputs
+- Out-of-range drift data and PSI edge cases
+- Degenerate targets (all-same-class, all-zeros, all-ones)
+- Constant-probability models in threshold finder
+- Rapid-fire experiment logging and registry consistency
+- JSON serialization of nan/inf
+- Config with `None` / empty-string / numeric modes
+- Task detector on empty, all-NaN, bool, float-int series
+- Engine pre-fit guard rails (predict/drift/explain before fit all raise)
+- Engine fit on duplicate-row, constant-feature, and wide datasets
+- Model store save/load with numpy-typed metadata
+- Explainer fallback to KernelExplainer for non-tree models
+
+**Expected result:** `122 passed` (warnings about NaN targets and convergence are expected and intentional).
+
+---
+
+## 🖥️ Example Output
+
+Running `main.py` in `full` mode on the Telco Churn dataset produces output like the following:
 
 ```
-[SelfTrainerEngine] Detecting task type...
-[SelfTrainerEngine] Task detected: classification
-[SelfTrainerEngine] Checking for class imbalance...
-[SelfTrainerEngine] Imbalance detected (ratio: 0.15)
-[SelfTrainerEngine] Training and evaluating models...
-[SelfTrainerEngine] Top 2 selected: XGBoostClassifier, LightGBMClassifier
-[SelfTrainerEngine] Tuning with Optuna...
-[SelfTrainerEngine] Best model: XGBoostClassifier
-[SelfTrainerEngine] Optimizing threshold...
-[SelfTrainerEngine] Optimal threshold: 0.23
-[SelfTrainerEngine] Experiment logged → experiments/run_20240101_120000/
-
-========== SUMMARY ==========
-Task: classification
-Best Model: XGBoostClassifier
-Test ROC-AUC: 0.9847
-Optimal Threshold: 0.23
-=============================
+2026-02-19 19:36:19 | INFO | self_trainer.core.config | EngineConfig initialised (mode=full).
+2026-02-19 19:36:19 | INFO | self_trainer.engine | Detected task type: classification
+2026-02-19 19:36:19 | INFO | self_trainer.engine | Data split — train: 4218, val: 1407, test: 1407 rows.
+2026-02-19 19:36:19 | INFO | self_trainer.engine | Cross-validation on TRAIN set (5 folds):
+2026-02-19 19:36:21 | INFO | self_trainer.engine |   LogisticRegression   0.846108
+2026-02-19 19:36:28 | INFO | self_trainer.engine |   RandomForest         0.827643
+2026-02-19 19:36:31 | INFO | self_trainer.engine |   XGBoost              0.831407
+2026-02-19 19:36:37 | INFO | self_trainer.engine |   LightGBM             0.826301
+2026-02-19 19:37:35 | INFO | self_trainer.engine |   MLP                  0.776735
+2026-02-19 19:37:35 | INFO | self_trainer.engine | Tuning LogisticRegression with Optuna...
+...
+Best params for LogisticRegression: {}
+Best CV score after tuning: 0.846108
+2026-02-19 19:39:37 | INFO | self_trainer.engine | Tuned LogisticRegression score: 0.846108
+2026-02-19 19:39:37 | INFO | self_trainer.engine | Tuning XGBoost with Optuna...
+...
+Best params for XGBoost: {'n_estimators': 282, 'max_depth': 3, 'learning_rate': 0.017,
+                           'subsample': 0.631, 'colsample_bytree': 0.776}
+Best CV score after tuning: 0.849974
+2026-02-19 19:41:39 | INFO | self_trainer.engine | Tuned XGBoost score: 0.849974
+2026-02-19 19:41:39 | INFO | self_trainer.engine | Final best model after tuning: XGBoost
+2026-02-19 19:41:39 | INFO | self_trainer.engine | Optimal threshold (validation): 0.3999  |  F1: 0.6724
+2026-02-19 19:41:40 | INFO | self_trainer.engine | Test score: 0.828399
+2026-02-19 19:41:40 | INFO | self_trainer.engine | Model saved → models/model_20260219_194140.pkl
+2026-02-19 19:41:40 | INFO | self_trainer.engine | Metadata saved → models/model_20260219_194140_meta.pkl
+2026-02-19 19:41:40 | INFO | self_trainer.engine | Experiment logged → experiments\run_20260219_194140
+2026-02-19 19:41:40 | INFO | self_trainer.engine | SHAP explainer fitted on 1000 samples.
+2026-02-19 19:41:43 | INFO | self_trainer.engine | Global SHAP plot saved → reports/global_shap.png
 ```
+
+Key things to note from the log:
+
+- All 5 models are evaluated with 5-fold CV on the train split before any tuning
+- Optuna tunes only the **top 2** models (LogisticRegression and XGBoost in this run)
+- LogisticRegression had no tunable params defined, so all its Optuna trials return the same score — this is expected behaviour
+- XGBoost improved from 0.8314 (baseline CV) to **0.8500** (tuned CV) and became the final best model
+- Threshold is optimised on the validation set independently of the test set
+
+---
+
+## 📊 Performance Benchmarks
+
+### Credit Card Fraud Detection (Dataset 1)
+
+| Model              | Cross-Val Score | Performance |
+| ------------------ | --------------- | ----------- |
+| **XGBoost ⭐**     | **0.990387**    | Outstanding |
+| LightGBM           | 0.977915        | Outstanding |
+| LogisticRegression | 0.972667        | Excellent   |
+| RandomForest       | 0.961487        | Excellent   |
+| MLP                | 0.729110        | Poor        |
+
+**Best Model**: XGBoost  
+**Final Test Score**: 0.977165  
+**Optimal Threshold**: 0.9856  
+**Validation F1**: 0.8235
+
+### Telco Customer Churn Detection (Dataset 2)
+
+| Model                     | Cross-Val Score | Performance |
+| ------------------------- | --------------- | ----------- |
+| **LogisticRegression ⭐** | **0.846108**    | Excellent   |
+| XGBoost                   | 0.831407        | Excellent   |
+| RandomForest              | 0.827643        | Excellent   |
+| LightGBM                  | 0.826301        | Excellent   |
+| MLP                       | 0.776735        | Good        |
+
+**Best Model After Tuning**: XGBoost (tuned CV: 0.849974)  
+**Final Test Score**: 0.828399  
+**Optimal Threshold**: 0.3999  
+**Validation F1**: 0.6724
+
+### Top Features (SHAP Analysis — Credit Card Fraud):
+
+1. **V10**: -3.818 (decreases fraud probability)
+2. **V14**: -2.056 (decreases fraud probability)
+3. **V12**: -1.625 (decreases fraud probability)
+4. **V4**: -1.186 (decreases fraud probability)
+5. **V16**: -0.730 (decreases fraud probability)
+
+> SHAP global feature importance plot for the Telco Churn run saved to `reports/global_shap.png`.
 
 ---
 
@@ -524,6 +617,12 @@ Optimal Threshold: 0.23
 - [x] LightGBM stability improvements
 - [x] Config-driven tree estimators
 - [x] Real-world dataset validation (Credit Card Fraud, Telco Churn)
+- [x] Comprehensive stress test suite (122 tests across 12 test classes)
+- [x] NaN/Inf/zero-variance robustness for baseline and drift modules
+- [x] DriftCalculationError: out-of-range columns excluded from report instead of returning NaN
+- [x] Custom exception hierarchy (InvalidConfigError, UnsupportedTaskError, DriftCalculationError, etc.)
+- [x] `test_size` and `val_size` parameters exposed on `engine.fit()`
+- [x] Configurable bin count for baseline builder
 
 ### v2.0 🔮 (Planned)
 
@@ -563,8 +662,9 @@ source venv/bin/activate  # or venv\Scripts\activate on Windows
 # Install development dependencies
 pip install -r requirements.txt
 
-# Run tests (if available)
-pytest tests/
+# Run tests
+pytest tests/test_stress.py -v        # stress tests (122 cases)
+pytest tests/test_self_trainer.py -v  # core tests
 ```
 
 ---
@@ -608,55 +708,11 @@ SOFTWARE.
 
 ---
 
-## 📊 Performance Benchmarks
-
-### Credit Card Fraud Detection (Dataset 1)
-
-| Model              | Cross-Val Score | Performance |
-| ------------------ | --------------- | ----------- |
-| **XGBoost ⭐**     | **0.990387**    | Outstanding |
-| LightGBM           | 0.977915        | Outstanding |
-| LogisticRegression | 0.972667        | Excellent   |
-| RandomForest       | 0.961487        | Excellent   |
-| MLP                | 0.729110        | Poor        |
-
-**Best Model**: XGBoost  
-**Final Test Score**: 0.977165  
-**Optimal Threshold**: 0.9856  
-**Validation F1**: 0.8235
-
-### Telco Customer Churn Detection (Dataset 2)
-
-| Model                     | Cross-Val Score | Performance |
-| ------------------------- | --------------- | ----------- |
-| **LogisticRegression ⭐** | **0.846108**    | Excellent   |
-| XGBoost                   | 0.831407        | Excellent   |
-| RandomForest              | 0.827643        | Excellent   |
-| LightGBM                  | 0.826301        | Excellent   |
-| MLP                       | 0.776735        | Good        |
-
-**Best Model After Tuning**: XGBoost  
-**Final Test Score**: 0.827987  
-**Optimal Threshold**: 0.3944  
-**Validation F1**: 0.6715
-
-### Top Features (SHAP Analysis — Credit Card Fraud):
-
-1. **V10**: -3.818 (decreases fraud probability)
-2. **V14**: -2.056 (decreases fraud probability)
-3. **V12**: -1.625 (decreases fraud probability)
-4. **V4**: -1.186 (decreases fraud probability)
-5. **V16**: -0.730 (decreases fraud probability)
-
-> SHAP global feature importance plot for the Telco Churn run saved to `reports/global_shap.png`.
-
----
-
 ## 🐛 Known Issues
 
-- None currently! 🎉
+- **LogisticRegression Optuna trials are redundant**: When LogisticRegression is selected as a top-2 model, all Optuna trials return the same score because no hyperparameter search space is currently defined for it. The tuner still runs without crashing, and the model is returned unchanged. A parameter grid for `C` and `solver` is planned for v2.0.
 
-If you encounter any issues, please [open an issue](https://github.com/Aryan-20-04/SelfTrainerEngine/issues) on GitHub.
+If you encounter any other issues, please [open an issue](https://github.com/Aryan-20-04/SelfTrainerEngine/issues) on GitHub.
 
 ---
 
@@ -689,6 +745,12 @@ A: The engine evaluates all candidate models, picks the top 2 by CV score, and t
 
 **Q: What is dev vs full mode?**  
 A: `mode="dev"` uses fewer CV folds, fewer tree estimators, and a shorter Optuna timeout for rapid iteration. `mode="full"` uses deeper settings for production-quality training.
+
+**Q: Why do all Optuna trials for LogisticRegression return the same value?**  
+A: LogisticRegression currently has no hyperparameter search space defined in the tuner, so every trial evaluates the same default config. This is a known limitation — see Known Issues above.
+
+**Q: What do the stress test warnings mean?**  
+A: The warnings produced during `pytest tests/test_stress.py` are expected. NaN-target warnings, convergence warnings, and "no positive class" warnings are all intentionally triggered by edge-case tests and are handled gracefully by the framework. All 122 tests pass.
 
 ---
 

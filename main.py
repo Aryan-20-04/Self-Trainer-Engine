@@ -1,5 +1,9 @@
 import pandas as pd
 from core.engine import SelfTrainerEngine
+from core.logging_setup import setup_logging
+setup_logging(level="INFO")              # normal use
+setup_logging(level="DEBUG")            # see every CV fold score
+setup_logging(log_file="trainer.log")   # also save to file
 
 df = pd.read_csv("data/telco_churn_data.csv")
 
